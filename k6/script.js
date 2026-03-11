@@ -191,3 +191,24 @@ export function setup() {
 export function teardown(data) {
   console.log(`✅ Load test completed. Started at: ${data.startTime}`);
 }
+
+// HTML Report Generation
+import { htmlReport } from "https://raw.githubusercontent.com/benc-uk/k6-reporter/main/dist/bundle.js";
+
+export function handleSummary(data) {
+  return {
+    "results/summary.html": htmlReport(data),
+    "results/summary.json": JSON.stringify(data, null, 2),
+    stdout: textSummary(data),
+  };
+}
+
+function textSummary(data) {
+  const { metrics } = data;
+  let output = '\n========== LOAD TEST SUMMARY ==========\n\n';
+  output += `Total Requests: ${metrics.http_reqs?.values?.count || 0}\n`;
+  output += `Failed Requests: ${metrics.http_req_failed?.values?.passes || 0}\n`;
+  output += `Avg Duration: ${(metrics.http_req_duration?.values?.avg || 0).toFixed(2)}ms\n`;
+  output += `P95 Duration: ${(metrics.http_req_duration?.values?.['p(95)'] || 0).toFixed(2)}ms\n`;
+  return output;
+}

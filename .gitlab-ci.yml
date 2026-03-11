@@ -1,0 +1,219 @@
+# ============================================
+# GitLab CI - Load Testing Pipeline
+# ============================================
+#
+# Stages:
+# 1. build - Build aplikasi
+# 2. deploy-staging - Deploy ke staging
+# 3. smoke-test - Quick validation
+# 4. load-test - Performance test
+# 5. report - Generate & publish reports
+
+stages:
+  - build
+  - deploy-staging
+  - smoke-test
+  - load-test
+  - report
+
+variables:
+  TARGET_URL: "https://jsonplaceholder.typicode.com"
+  K6_VERSION: "0.47.0"
+
+# ==========================================
+# Templates
+# ==========================================
+.k6-template: &k6-template
+  image: grafana/k6:${K6_VERSION}
+  artifacts:
+    when: always
+    paths:
+      - results/
+      - "*.html"
+      - "*.json"
+    expire_in: 30 days
+    reports:
+      performance: results/k6-summary.json
+
+.artillery-template: &artillery-template
+  image: node:20-alpine
+  before_script:
+    - npm install -g artillery@latest
+  artifacts:
+    when: always
+    paths:
+      - results/
+    expire_in: 30 days
+
+# ==========================================
+# Build Stage (placeholder)
+# ==========================================
+build:
+  stage: build
+  image: alpine:latest
+  script:
+    - echo "Building application..."
+    - mkdir -p build
+    - echo "Build complete" > build/status.txt
+  artifacts:
+    paths:
+      - build/
+  only:
+    - main
+    - merge_requests
+
+# ==========================================
+# Deploy Staging (placeholder)
+# ==========================================
+deploy-staging:
+  stage: deploy-staging
+  image: alpine:latest
+  script:
+    - echo "Deploying to staging environment..."
+    - echo "Deployed to ${TARGET_URL}"
+  environment:
+    name: staging
+    url: ${TARGET_URL}
+  only:
+    - main
+    - merge_requests
+
+# ==========================================
+# Smoke Test - Runs on every MR
+# ==========================================
+smoke-test:k6:
+  <<: *k6-template
+  stage: smoke-test
+  script:
+    - mkdir -p results
+    - k6 run load-testing/k6/script.js
+        --env SCENARIO=smoke
+        --out json=results/k6-results.json
+        --summary-export=results/k6-summary.json
+        --duration 30s
+        --vus 2
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+smoke-test:artillery:
+  <<: *artillery-template
+  stage: smoke-test
+  script:
+    - mkdir -p results
+    - |
+      artillery run load-testing/artillery/config.yml \
+        --output results/artillery-report.json \
+        --overrides '{"config":{"phases":[{"duration":30,"arrivalRate":2}]}}'
+    - artillery report results/artillery-report.json --output results/artillery-report.html
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ==========================================
+# Load Test - Runs on main branch
+# ==========================================
+load-test:k6:
+  <<: *k6-template
+  stage: load-test
+  script:
+    - mkdir -p results
+    - k6 run load-testing/k6/advanced-script.js
+        --env SCENARIO=load
+        --out json=results/k6-load-results.json
+        --summary-export=results/k6-load-summary.json
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  allow_failure: false
+
+load-test:artillery:
+  <<: *artillery-template
+  stage: load-test
+  script:
+    - mkdir -p results
+    - artillery run load-testing/artillery/advanced-config.yml --output results/artillery-load-report.json
+    - artillery report results/artillery-load-report.json --output results/artillery-load-report.html
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+load-test:locust:
+  stage: load-test
+  image: python:3.11-slim
+  before_script:
+    - pip install locust
+  script:
+    - mkdir -p results
+    - |
+      locust -f load-testing/locust/advanced_locustfile.py \
+        --host=${TARGET_URL} \
+        --headless \
+        --users 30 \
+        --spawn-rate 5 \
+        --run-time 5m \
+        --html results/locust-report.html \
+        --csv results/locust
+  artifacts:
+    when: always
+    paths:
+      - results/
+    expire_in: 30 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ==========================================
+# Stress Test - Scheduled/Manual only
+# ==========================================
+stress-test:k6:
+  <<: *k6-template
+  stage: load-test
+  script:
+    - mkdir -p results
+    - k6 run load-testing/k6/advanced-script.js
+        --env SCENARIO=stress
+        --out json=results/k6-stress-results.json
+        --summary-export=results/k6-stress-summary.json
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+  allow_failure: true
+
+# ==========================================
+# Full Test - Nightly scheduled
+# ==========================================
+full-test:
+  <<: *k6-template
+  stage: load-test
+  script:
+    - mkdir -p results
+    - k6 run load-testing/k6/advanced-script.js
+        --out json=results/k6-full-results.json
+        --summary-export=results/k6-full-summary.json
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  timeout: 2h
+
+# ==========================================
+# Report Generation
+# ==========================================
+generate-report:
+  stage: report
+  image: alpine:latest
+  script:
+    - echo "Generating consolidated report..."
+    - ls -la results/ || echo "No results found"
+  artifacts:
+    when: always
+    paths:
+      - results/
+    expire_in: 90 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+# ==========================================
+# Scheduled Pipeline
+# ==========================================
+# Buat schedule di GitLab CI/CD > Schedules:
+# - Nightly: 0 2 * * * (jam 2 pagi)
+# - Weekly stress: 0 3 * * 0 (Minggu jam 3 pagi)

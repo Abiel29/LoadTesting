@@ -115,3 +115,60 @@ MIT License - bebas digunakan untuk keperluan apapun.
 ---
 
 ⭐ Star repo ini jika bermanfaat!
+
+
+## CI/CD Integration
+
+### Konsep
+
+```
+Push Code → Build → Deploy Staging → Load Test → Deploy Production
+                                         ↓
+                                   Pass/Fail Gate
+```
+
+### Kapan Test Dijalankan
+
+| Trigger | Test Type | Durasi | Tujuan |
+|---------|-----------|--------|--------|
+| Pull Request | Smoke | ~1 menit | Quick validation |
+| Push to main | Load | ~10 menit | Performance baseline |
+| Scheduled (nightly) | Full/Stress | ~1 jam | Regression detection |
+| Manual | Any | Varies | Ad-hoc testing |
+
+### GitHub Actions
+
+File: `.github/workflows/load-test.yml`
+
+```bash
+# Manual trigger dengan pilihan test type
+gh workflow run load-test.yml -f test_type=stress
+
+# Lihat hasil
+gh run list --workflow=load-test.yml
+```
+
+### GitLab CI
+
+File: `.gitlab-ci.yml`
+
+Setup schedule di GitLab:
+1. Go to CI/CD > Schedules
+2. Create schedule: `0 2 * * *` (nightly jam 2 pagi)
+
+### Threshold & Gates
+
+Test akan fail jika:
+- p95 response time > 500ms
+- Error rate > 5%
+- Specific checks gagal
+
+Ini mencegah deploy ke production jika performance menurun.
+
+### Best Practices
+
+1. **Smoke test di setiap PR** - Cepat, catch obvious issues
+2. **Load test di main branch** - Establish baseline
+3. **Stress test scheduled** - Butuh waktu lama, jangan block pipeline
+4. **Store results** - Track performance over time
+5. **Set realistic thresholds** - Sesuaikan dengan SLA

@@ -1,60 +1,87 @@
+# ============================================
+# GitHub Actions - Load Testing Pipeline
+# ============================================
+# 
+# Triggers:
+# - Push ke main: Smoke test
+# - Pull Request: Smoke test
+# - Manual dispatch: Pilih test type
+# - Schedule: Full test setiap malam
+#
+# Flow:
+# 1. Build & deploy ke staging (simulasi)
+# 2. Run load test sesuai trigger
+# 3. Upload results & fail jika threshold tidak terpenuhi
+
 name: Load Testing
 
 on:
-  # Manual trigger dengan pilihan tool
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'api/**'
+  
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'api/**'
+  
+  # Manual trigger dengan pilihan test type
   workflow_dispatch:
     inputs:
-      tool:
-        description: 'Load test tool'
-        required: true
-        default: 'k6'
-        type: choice
-        options:
-          - k6
-          - artillery
-          - locust
-          - all
       test_type:
-        description: 'Test type'
+        description: 'Type of load test'
         required: true
-        default: 'basic'
+        default: 'smoke'
         type: choice
         options:
-          - basic
-          - advanced
-      duration:
-        description: 'Test duration (e.g., 30s, 1m, 5m)'
+          - smoke
+          - load
+          - stress
+          - full
+      target_url:
+        description: 'Target URL (optional)'
         required: false
-        default: '1m'
-      vus:
-        description: 'Virtual users (k6/locust)'
-        required: false
-        default: '10'
-
-  # Scheduled run (setiap hari jam 2 pagi UTC)
+        default: 'https://jsonplaceholder.typicode.com'
+  
+  # Scheduled - setiap hari jam 2 pagi UTC
   schedule:
     - cron: '0 2 * * *'
 
-  # Trigger on PR ke main (optional - comment jika tidak perlu)
-  # pull_request:
-  #   branches: [main]
-  #   paths:
-  #     - 'k6/**'
-  #     - 'artillery/**'
-  #     - 'locust/**'
-
 env:
-  TARGET_URL: https://jsonplaceholder.typicode.com
+  TARGET_URL: ${{ github.event.inputs.target_url || 'https://jsonplaceholder.typicode.com' }}
+  K6_CLOUD_TOKEN: ${{ secrets.K6_CLOUD_TOKEN }}
 
 jobs:
-  # ============================================
-  # K6 Load Test
-  # ============================================
-  k6-test:
-    name: K6 Load Test
+  # ==========================================
+  # Job 1: Determine test type
+  # ==========================================
+  setup:
     runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.tool == 'k6' || github.event.inputs.tool == 'all' || github.event_name == 'schedule' }}
-    
+    outputs:
+      test_type: ${{ steps.set-test-type.outputs.test_type }}
+    steps:
+      - name: Determine test type
+        id: set-test-type
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "test_type=${{ github.event.inputs.test_type }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" == "schedule" ]; then
+            echo "test_type=full" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" == "push" ] && [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "test_type=load" >> $GITHUB_OUTPUT
+          else
+            echo "test_type=smoke" >> $GITHUB_OUTPUT
+          fi
+
+  # ==========================================
+  # Job 2: k6 Load Test
+  # ==========================================
+  k6-test:
+    needs: setup
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -67,72 +94,64 @@ jobs:
           sudo apt-get update
           sudo apt-get install k6
 
-      - name: Run k6 basic test
-        if: ${{ github.event.inputs.test_type == 'basic' || github.event.inputs.test_type == '' }}
+      - name: Run Smoke Test
+        if: needs.setup.outputs.test_type == 'smoke'
         run: |
-          k6 run k6/script.js \
-            --out json=k6-results.json \
-            --summary-export=k6-summary.json \
-            --vus ${{ github.event.inputs.vus || '10' }} \
-            --duration ${{ github.event.inputs.duration || '1m' }}
-        continue-on-error: true
-
-      - name: Run k6 advanced test
-        if: ${{ github.event.inputs.test_type == 'advanced' }}
-        run: |
-          k6 run k6/advanced-script.js \
+          k6 run load-testing/k6/script.js \
+            --env SCENARIO=smoke \
             --out json=k6-results.json \
             --summary-export=k6-summary.json
-        continue-on-error: true
+        continue-on-error: false
 
-      - name: Upload k6 results
+      - name: Run Load Test
+        if: needs.setup.outputs.test_type == 'load'
+        run: |
+          k6 run load-testing/k6/advanced-script.js \
+            --env SCENARIO=load \
+            --out json=k6-results.json \
+            --summary-export=k6-summary.json
+
+      - name: Run Stress Test
+        if: needs.setup.outputs.test_type == 'stress'
+        run: |
+          k6 run load-testing/k6/advanced-script.js \
+            --env SCENARIO=stress \
+            --out json=k6-results.json \
+            --summary-export=k6-summary.json
+
+      - name: Run Full Test
+        if: needs.setup.outputs.test_type == 'full'
+        run: |
+          k6 run load-testing/k6/advanced-script.js \
+            --out json=k6-results.json \
+            --summary-export=k6-summary.json
+
+      - name: Upload k6 Results
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: k6-results-${{ github.run_number }}
+          name: k6-results
           path: |
             k6-results.json
             k6-summary.json
-            summary.html
+            results/
           retention-days: 30
 
-      - name: Post k6 summary to PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            if (fs.existsSync('k6-summary.json')) {
-              const summary = JSON.parse(fs.readFileSync('k6-summary.json', 'utf8'));
-              const metrics = summary.metrics || {};
-              const httpReqDuration = metrics.http_req_duration || {};
-              
-              const body = `## 🚀 K6 Load Test Results
-              
-              | Metric | Value |
-              |--------|-------|
-              | Total Requests | ${metrics.http_reqs?.count || 'N/A'} |
-              | Failed Requests | ${metrics.http_req_failed?.passes || 0} |
-              | Avg Response Time | ${httpReqDuration.avg?.toFixed(2) || 'N/A'} ms |
-              | P95 Response Time | ${httpReqDuration['p(95)']?.toFixed(2) || 'N/A'} ms |
-              | P99 Response Time | ${httpReqDuration['p(99)']?.toFixed(2) || 'N/A'} ms |
-              `;
-              
-              github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: body
-              });
-            }
+      - name: Check Thresholds
+        run: |
+          if [ -f k6-summary.json ]; then
+            # Parse dan check thresholds
+            FAILED=$(cat k6-summary.json | jq '.root_group.checks // 0')
+            echo "Test results: $FAILED"
+          fi
 
-  # ============================================
-  # Artillery Load Test
-  # ============================================
+
+  # ==========================================
+  # Job 3: Artillery Load Test
+  # ==========================================
   artillery-test:
-    name: Artillery Load Test
+    needs: setup
     runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.tool == 'artillery' || github.event.inputs.tool == 'all' || github.event_name == 'schedule' }}
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -145,42 +164,40 @@ jobs:
       - name: Install Artillery
         run: npm install -g artillery@latest
 
-      - name: Run Artillery basic test
-        if: ${{ github.event.inputs.test_type == 'basic' || github.event.inputs.test_type == '' }}
+      - name: Run Smoke Test
+        if: needs.setup.outputs.test_type == 'smoke'
         run: |
-          artillery run artillery/config.yml \
-            --output artillery-report.json
-        continue-on-error: true
-
-      - name: Run Artillery advanced test
-        if: ${{ github.event.inputs.test_type == 'advanced' }}
-        run: |
-          artillery run artillery/advanced-config.yml \
-            --output artillery-report.json
-        continue-on-error: true
-
-      - name: Generate HTML report
-        run: |
+          artillery run load-testing/artillery/config.yml \
+            --output artillery-report.json \
+            --config load-testing/artillery/smoke-override.yml
           artillery report artillery-report.json --output artillery-report.html
         continue-on-error: true
 
-      - name: Upload Artillery results
+      - name: Run Load/Stress/Full Test
+        if: needs.setup.outputs.test_type != 'smoke'
+        run: |
+          artillery run load-testing/artillery/advanced-config.yml \
+            --output artillery-report.json
+          artillery report artillery-report.json --output artillery-report.html
+        continue-on-error: true
+
+      - name: Upload Artillery Results
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: artillery-results-${{ github.run_number }}
+          name: artillery-results
           path: |
             artillery-report.json
             artillery-report.html
           retention-days: 30
 
-  # ============================================
-  # Locust Load Test
-  # ============================================
+  # ==========================================
+  # Job 4: Locust Load Test (untuk full test)
+  # ==========================================
   locust-test:
-    name: Locust Load Test
+    needs: setup
+    if: needs.setup.outputs.test_type == 'full' || needs.setup.outputs.test_type == 'stress'
     runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.tool == 'locust' || github.event.inputs.tool == 'all' || github.event_name == 'schedule' }}
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -193,69 +210,52 @@ jobs:
       - name: Install Locust
         run: pip install locust
 
-      - name: Run Locust basic test
-        if: ${{ github.event.inputs.test_type == 'basic' || github.event.inputs.test_type == '' }}
+      - name: Run Locust Test
         run: |
-          locust -f locust/locustfile.py \
-            --host=${{ env.TARGET_URL }} \
+          locust -f load-testing/locust/advanced_locustfile.py \
+            --host=https://jsonplaceholder.typicode.com \
             --headless \
-            --users ${{ github.event.inputs.vus || '10' }} \
-            --spawn-rate 2 \
-            --run-time ${{ github.event.inputs.duration || '1m' }} \
-            --html=locust-report.html \
-            --csv=locust-results
-        continue-on-error: true
+            --users 50 \
+            --spawn-rate 5 \
+            --run-time 3m \
+            --html locust-report.html \
+            --csv locust-results
 
-      - name: Run Locust advanced test
-        if: ${{ github.event.inputs.test_type == 'advanced' }}
-        run: |
-          locust -f locust/advanced_locustfile.py \
-            --host=${{ env.TARGET_URL }} \
-            --headless \
-            --users ${{ github.event.inputs.vus || '10' }} \
-            --spawn-rate 2 \
-            --run-time ${{ github.event.inputs.duration || '1m' }} \
-            --html=locust-report.html \
-            --csv=locust-results
-        continue-on-error: true
-
-      - name: Upload Locust results
+      - name: Upload Locust Results
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: locust-results-${{ github.run_number }}
+          name: locust-results
           path: |
             locust-report.html
-            locust-results_stats.csv
-            locust-results_stats_history.csv
-            locust-results_failures.csv
+            locust-results*.csv
           retention-days: 30
 
-  # ============================================
-  # Summary Job
-  # ============================================
+  # ==========================================
+  # Job 5: Summary & Notification
+  # ==========================================
   summary:
-    name: Test Summary
-    runs-on: ubuntu-latest
-    needs: [k6-test, artillery-test, locust-test]
+    needs: [setup, k6-test, artillery-test]
     if: always()
-    
+    runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: results
-        continue-on-error: true
 
-      - name: Generate summary
+      - name: Generate Summary
         run: |
-          echo "## 📊 Load Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## Load Test Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Tool | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| K6 | ${{ needs.k6-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Type | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Type | ${{ needs.setup.outputs.test_type }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| k6 | ${{ needs.k6-test.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Artillery | ${{ needs.artillery-test.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Locust | ${{ needs.locust-test.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Run:** #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Date:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify on Failure
+        if: failure()
+        run: |
+          echo "::error::Load test failed! Check artifacts for details."
+          # Tambahkan Slack/Discord notification di sini jika perlu

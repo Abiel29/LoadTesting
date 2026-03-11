@@ -728,60 +728,24 @@ export function teardown(data) {
   console.log(`⏱️  Ended: ${new Date().toISOString()}`);
 }
 
+// Import k6-reporter untuk HTML report yang lebih bagus
+import { htmlReport } from "https://raw.githubusercontent.com/benc-uk/k6-reporter/main/dist/bundle.js";
+
 export function handleSummary(data) {
   return {
-    'stdout': textSummary(data, { indent: ' ', enableColors: true }),
-    'summary.json': JSON.stringify(data, null, 2),
-    'summary.html': htmlReport(data),
+    'stdout': textSummary(data),
+    'results/summary.json': JSON.stringify(data, null, 2),
+    'results/summary.html': htmlReport(data),
   };
 }
 
-// Simple text summary
-function textSummary(data, options) {
+function textSummary(data) {
   const { metrics } = data;
   let output = '\n========== LOAD TEST SUMMARY ==========\n\n';
-  
   output += `Total Requests: ${metrics.http_reqs?.values?.count || 0}\n`;
   output += `Failed Requests: ${metrics.http_req_failed?.values?.passes || 0}\n`;
   output += `Avg Duration: ${(metrics.http_req_duration?.values?.avg || 0).toFixed(2)}ms\n`;
   output += `P95 Duration: ${(metrics.http_req_duration?.values?.['p(95)'] || 0).toFixed(2)}ms\n`;
   output += `P99 Duration: ${(metrics.http_req_duration?.values?.['p(99)'] || 0).toFixed(2)}ms\n`;
-  
   return output;
-}
-
-// Simple HTML report
-function htmlReport(data) {
-  const { metrics } = data;
-  return `
-<!DOCTYPE html>
-<html>
-<head>
-  <title>K6 Load Test Report</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 40px; }
-    .metric { margin: 10px 0; padding: 10px; background: #f5f5f5; border-radius: 4px; }
-    .pass { color: green; }
-    .fail { color: red; }
-  </style>
-</head>
-<body>
-  <h1>Load Test Report</h1>
-  <p>Generated: ${new Date().toISOString()}</p>
-  
-  <h2>Key Metrics</h2>
-  <div class="metric">
-    <strong>Total Requests:</strong> ${metrics.http_reqs?.values?.count || 0}
-  </div>
-  <div class="metric">
-    <strong>Error Rate:</strong> ${((metrics.http_req_failed?.values?.rate || 0) * 100).toFixed(2)}%
-  </div>
-  <div class="metric">
-    <strong>Avg Response Time:</strong> ${(metrics.http_req_duration?.values?.avg || 0).toFixed(2)}ms
-  </div>
-  <div class="metric">
-    <strong>P95 Response Time:</strong> ${(metrics.http_req_duration?.values?.['p(95)'] || 0).toFixed(2)}ms
-  </div>
-</body>
-</html>`;
 }
