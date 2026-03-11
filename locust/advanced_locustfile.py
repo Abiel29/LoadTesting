@@ -126,7 +126,7 @@ def on_test_stop(environment, **kwargs):
 def on_request(request_type, name, response_time, response_length, response, 
                context, exception, start_time, url, **kwargs):
     """Called for every request."""
-    if response:
+    if response is not None and hasattr(response, 'status_code'):
         metrics.record_response(response.status_code)
 
 @events.user_error.add_listener

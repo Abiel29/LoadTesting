@@ -51,17 +51,12 @@ on:
           - k6
           - artillery
           - locust
-      target_url:
-        description: 'Target URL (optional)'
-        required: false
-        default: 'https://jsonplaceholder.typicode.com'
-  
   # Scheduled - setiap hari jam 2 pagi UTC
   schedule:
     - cron: '0 2 * * *'
 
 env:
-  TARGET_URL: ${{ github.event.inputs.target_url || 'https://jsonplaceholder.typicode.com' }}
+  TARGET_URL: 'https://jsonplaceholder.typicode.com'
   K6_CLOUD_TOKEN: ${{ secrets.K6_CLOUD_TOKEN }}
 
 jobs:
@@ -195,7 +190,6 @@ jobs:
           artillery run artillery/config.yml \
             --output artillery-report.json \
             --config artillery/smoke-override.yml
-          artillery report artillery-report.json --output artillery-report.html
         continue-on-error: true
 
       - name: Run Load/Stress/Full Test
@@ -203,8 +197,14 @@ jobs:
         run: |
           artillery run artillery/advanced-config.yml \
             --output artillery-report.json
-          artillery report artillery-report.json --output artillery-report.html
         continue-on-error: true
+
+      - name: Generate HTML Report
+        if: always()
+        run: |
+          if [ -f artillery-report.json ]; then
+            artillery report artillery-report.json --output artillery-report.html || echo "Failed to generate HTML report"
+          fi
 
       - name: Upload Artillery Results
         uses: actions/upload-artifact@v4
@@ -332,19 +332,39 @@ jobs:
             echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
             echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
             
-            # Parse k6 summary JSON
+            # Parse k6 summary JSON with safe number formatting
+            format_number() {
+              local val="$1"
+              if [ "$val" == "null" ] || [ "$val" == "N/A" ] || [ -z "$val" ]; then
+                echo "N/A"
+              else
+                printf "%.2f" "$val" 2>/dev/null || echo "$val"
+              fi
+            }
+            
             TOTAL_REQUESTS=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.http_reqs.values.count // "N/A"')
-            AVG_DURATION=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.http_req_duration.values.avg // "N/A"' | xargs printf "%.2f")
-            P95_DURATION=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.http_req_duration.values["p(95)"] // "N/A"' | xargs printf "%.2f")
-            P99_DURATION=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.http_req_duration.values["p(99)"] // "N/A"' | xargs printf "%.2f")
+            AVG_DURATION_RAW=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.http_req_duration.values.avg // empty')
+            AVG_DURATION=$(format_number "$AVG_DURATION_RAW")
+            P95_DURATION_RAW=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.http_req_duration.values["p(95)"] // empty')
+            P95_DURATION=$(format_number "$P95_DURATION_RAW")
+            P99_DURATION_RAW=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.http_req_duration.values["p(99)"] // empty')
+            P99_DURATION=$(format_number "$P99_DURATION_RAW")
             FAILED_REQUESTS=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.http_req_failed.values.passes // 0')
             VUS_MAX=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.vus_max.values.max // "N/A"')
             DATA_RECEIVED=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.data_received.values.count // 0')
             DATA_SENT=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.data_sent.values.count // 0')
             
             # Convert bytes to KB/MB
-            DATA_RECEIVED_KB=$(echo "scale=2; $DATA_RECEIVED / 1024" | bc 2>/dev/null || echo "N/A")
-            DATA_SENT_KB=$(echo "scale=2; $DATA_SENT / 1024" | bc 2>/dev/null || echo "N/A")
+            if [ "$DATA_RECEIVED" != "0" ] && [ "$DATA_RECEIVED" != "null" ]; then
+              DATA_RECEIVED_KB=$(echo "scale=2; $DATA_RECEIVED / 1024" | bc 2>/dev/null || echo "N/A")
+            else
+              DATA_RECEIVED_KB="N/A"
+            fi
+            if [ "$DATA_SENT" != "0" ] && [ "$DATA_SENT" != "null" ]; then
+              DATA_SENT_KB=$(echo "scale=2; $DATA_SENT / 1024" | bc 2>/dev/null || echo "N/A")
+            else
+              DATA_SENT_KB="N/A"
+            fi
             
             echo "| Total Requests | $TOTAL_REQUESTS |" >> $GITHUB_STEP_SUMMARY
             echo "| Max Virtual Users | $VUS_MAX |" >> $GITHUB_STEP_SUMMARY
