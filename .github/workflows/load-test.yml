@@ -28,7 +28,7 @@ on:
       - 'src/**'
       - 'api/**'
   
-  # Manual trigger dengan pilihan test type
+  # Manual trigger dengan pilihan test type dan tool
   workflow_dispatch:
     inputs:
       test_type:
@@ -41,6 +41,16 @@ on:
           - load
           - stress
           - full
+      tool:
+        description: 'Load testing tool'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - k6
+          - artillery
+          - locust
       target_url:
         description: 'Target URL (optional)'
         required: false
@@ -62,6 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       test_type: ${{ steps.set-test-type.outputs.test_type }}
+      tool: ${{ steps.set-tool.outputs.tool }}
     steps:
       - name: Determine test type
         id: set-test-type
@@ -76,11 +87,21 @@ jobs:
             echo "test_type=smoke" >> $GITHUB_OUTPUT
           fi
 
+      - name: Determine tool
+        id: set-tool
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "tool=${{ github.event.inputs.tool }}" >> $GITHUB_OUTPUT
+          else
+            echo "tool=all" >> $GITHUB_OUTPUT
+          fi
+
   # ==========================================
   # Job 2: k6 Load Test
   # ==========================================
   k6-test:
     needs: setup
+    if: needs.setup.outputs.tool == 'all' || needs.setup.outputs.tool == 'k6'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -154,6 +175,7 @@ jobs:
   # ==========================================
   artillery-test:
     needs: setup
+    if: needs.setup.outputs.tool == 'all' || needs.setup.outputs.tool == 'artillery'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -195,11 +217,11 @@ jobs:
           retention-days: 30
 
   # ==========================================
-  # Job 4: Locust Load Test (untuk full test)
+  # Job 4: Locust Load Test
   # ==========================================
   locust-test:
     needs: setup
-    if: needs.setup.outputs.test_type == 'full' || needs.setup.outputs.test_type == 'stress'
+    if: needs.setup.outputs.tool == 'all' || needs.setup.outputs.tool == 'locust'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -238,7 +260,7 @@ jobs:
   # Job 5: Summary & Notification
   # ==========================================
   summary:
-    needs: [setup, k6-test, artillery-test]
+    needs: [setup, k6-test, artillery-test, locust-test]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -255,6 +277,7 @@ jobs:
           echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Test Type | \`${{ needs.setup.outputs.test_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tool | \`${{ needs.setup.outputs.tool }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Target URL | \`${{ env.TARGET_URL }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Trigger | \`${{ github.event_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -264,21 +287,42 @@ jobs:
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
           
           # k6 status with emoji
-          if [ "${{ needs.k6-test.result }}" == "success" ]; then
-            echo "| k6 | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ needs.k6-test.result }}" == "failure" ]; then
-            echo "| k6 | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.setup.outputs.tool }}" == "all" ] || [ "${{ needs.setup.outputs.tool }}" == "k6" ]; then
+            if [ "${{ needs.k6-test.result }}" == "success" ]; then
+              echo "| k6 | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+            elif [ "${{ needs.k6-test.result }}" == "failure" ]; then
+              echo "| k6 | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| k6 | ⚠️ ${{ needs.k6-test.result }} |" >> $GITHUB_STEP_SUMMARY
+            fi
           else
-            echo "| k6 | ⚠️ ${{ needs.k6-test.result }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| k6 | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY
           fi
           
           # Artillery status with emoji
-          if [ "${{ needs.artillery-test.result }}" == "success" ]; then
-            echo "| Artillery | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ needs.artillery-test.result }}" == "failure" ]; then
-            echo "| Artillery | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.setup.outputs.tool }}" == "all" ] || [ "${{ needs.setup.outputs.tool }}" == "artillery" ]; then
+            if [ "${{ needs.artillery-test.result }}" == "success" ]; then
+              echo "| Artillery | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+            elif [ "${{ needs.artillery-test.result }}" == "failure" ]; then
+              echo "| Artillery | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| Artillery | ⚠️ ${{ needs.artillery-test.result }} |" >> $GITHUB_STEP_SUMMARY
+            fi
           else
-            echo "| Artillery | ⚠️ ${{ needs.artillery-test.result }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Artillery | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Locust status with emoji
+          if [ "${{ needs.setup.outputs.tool }}" == "all" ] || [ "${{ needs.setup.outputs.tool }}" == "locust" ]; then
+            if [ "${{ needs.locust-test.result }}" == "success" ]; then
+              echo "| Locust | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+            elif [ "${{ needs.locust-test.result }}" == "failure" ]; then
+              echo "| Locust | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| Locust | ⚠️ ${{ needs.locust-test.result }} |" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "| Locust | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           
@@ -353,9 +397,13 @@ jobs:
           # Artifacts info
           echo "### 📁 Artifacts" >> $GITHUB_STEP_SUMMARY
           echo "Download detailed reports from the workflow artifacts:" >> $GITHUB_STEP_SUMMARY
-          echo "- \`k6-results\` - k6 JSON results and summary" >> $GITHUB_STEP_SUMMARY
-          echo "- \`artillery-results\` - Artillery JSON and HTML reports" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ needs.setup.outputs.test_type }}" == "full" ] || [ "${{ needs.setup.outputs.test_type }}" == "stress" ]; then
+          if [ "${{ needs.setup.outputs.tool }}" == "all" ] || [ "${{ needs.setup.outputs.tool }}" == "k6" ]; then
+            echo "- \`k6-results\` - k6 JSON results and summary" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ needs.setup.outputs.tool }}" == "all" ] || [ "${{ needs.setup.outputs.tool }}" == "artillery" ]; then
+            echo "- \`artillery-results\` - Artillery JSON and HTML reports" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ needs.setup.outputs.tool }}" == "all" ] || [ "${{ needs.setup.outputs.tool }}" == "locust" ]; then
             echo "- \`locust-results\` - Locust HTML report and CSV data" >> $GITHUB_STEP_SUMMARY
           fi
 

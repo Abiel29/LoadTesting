@@ -705,15 +705,31 @@ export function setup() {
   console.log('🚀 Advanced Load Test Starting...');
   console.log(`📍 Targets: ${CONFIG.jsonPlaceholder}, ${CONFIG.reqRes}`);
   
-  // Verify APIs are accessible
-  const checks = [
-    http.get(`${CONFIG.jsonPlaceholder}/posts/1`),
-    http.get(`${CONFIG.reqRes}/users/1`),
-  ];
+  // Verify APIs are accessible with retries
+  const maxRetries = 3;
+  let allHealthy = false;
   
-  const allHealthy = checks.every(r => r.status === 200);
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const checks = [
+      http.get(`${CONFIG.jsonPlaceholder}/posts/1`),
+      http.get(`${CONFIG.reqRes}/users/1`),
+    ];
+    
+    allHealthy = checks.every(r => r.status === 200);
+    
+    if (allHealthy) {
+      console.log(`✅ Health check passed on attempt ${attempt}`);
+      break;
+    }
+    
+    if (attempt < maxRetries) {
+      console.log(`⚠️ Health check failed (attempt ${attempt}/${maxRetries}), retrying in 3s...`);
+      sleep(3);
+    }
+  }
+  
   if (!allHealthy) {
-    fail('One or more APIs are not accessible!');
+    fail('One or more APIs are not accessible after 3 retries!');
   }
   
   return {
