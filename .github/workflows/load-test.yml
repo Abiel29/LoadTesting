@@ -94,10 +94,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install k6
 
+      - name: Create results directory
+        run: mkdir -p results
+
       - name: Run Smoke Test
         if: needs.setup.outputs.test_type == 'smoke'
         run: |
-          k6 run k6/script.js \
+          k6 run load-testing/k6/script.js \
             --env SCENARIO=smoke \
             --out json=k6-results.json \
             --summary-export=k6-summary.json
@@ -106,7 +109,7 @@ jobs:
       - name: Run Load Test
         if: needs.setup.outputs.test_type == 'load'
         run: |
-          k6 run k6/advanced-script.js \
+          k6 run load-testing/k6/advanced-script.js \
             --env SCENARIO=load \
             --out json=k6-results.json \
             --summary-export=k6-summary.json
@@ -114,7 +117,7 @@ jobs:
       - name: Run Stress Test
         if: needs.setup.outputs.test_type == 'stress'
         run: |
-          k6 run k6/advanced-script.js \
+          k6 run load-testing/k6/advanced-script.js \
             --env SCENARIO=stress \
             --out json=k6-results.json \
             --summary-export=k6-summary.json
@@ -122,7 +125,7 @@ jobs:
       - name: Run Full Test
         if: needs.setup.outputs.test_type == 'full'
         run: |
-          k6 run k6/advanced-script.js \
+          k6 run load-testing/k6/advanced-script.js \
             --out json=k6-results.json \
             --summary-export=k6-summary.json
 
@@ -167,16 +170,16 @@ jobs:
       - name: Run Smoke Test
         if: needs.setup.outputs.test_type == 'smoke'
         run: |
-          artillery run artillery/config.yml \
+          artillery run load-testing/artillery/config.yml \
             --output artillery-report.json \
-            --config artillery/smoke-override.yml
+            --config load-testing/artillery/smoke-override.yml
           artillery report artillery-report.json --output artillery-report.html
         continue-on-error: true
 
       - name: Run Load/Stress/Full Test
         if: needs.setup.outputs.test_type != 'smoke'
         run: |
-          artillery run artillery/advanced-config.yml \
+          artillery run load-testing/artillery/advanced-config.yml \
             --output artillery-report.json
           artillery report artillery-report.json --output artillery-report.html
         continue-on-error: true
@@ -212,7 +215,7 @@ jobs:
 
       - name: Run Locust Test
         run: |
-          locust -f locust/advanced_locustfile.py \
+          locust -f load-testing/locust/advanced_locustfile.py \
             --host=https://jsonplaceholder.typicode.com \
             --headless \
             --users 50 \
@@ -246,13 +249,115 @@ jobs:
 
       - name: Generate Summary
         run: |
-          echo "## Load Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Load Test Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Test Type | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Test Type | ${{ needs.setup.outputs.test_type }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| k6 | ${{ needs.k6-test.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Artillery | ${{ needs.artillery-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "### Test Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Type | \`${{ needs.setup.outputs.test_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Target URL | \`${{ env.TARGET_URL }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trigger | \`${{ github.event_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Test Status" >> $GITHUB_STEP_SUMMARY
+          echo "| Tool | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          # k6 status with emoji
+          if [ "${{ needs.k6-test.result }}" == "success" ]; then
+            echo "| k6 | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.k6-test.result }}" == "failure" ]; then
+            echo "| k6 | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| k6 | ⚠️ ${{ needs.k6-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Artillery status with emoji
+          if [ "${{ needs.artillery-test.result }}" == "success" ]; then
+            echo "| Artillery | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.artillery-test.result }}" == "failure" ]; then
+            echo "| Artillery | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Artillery | ⚠️ ${{ needs.artillery-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # k6 Results Detail
+          echo "### 🔷 k6 Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f results/k6-results/k6-summary.json ]; then
+            echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            
+            # Parse k6 summary JSON
+            TOTAL_REQUESTS=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.http_reqs.values.count // "N/A"')
+            AVG_DURATION=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.http_req_duration.values.avg // "N/A"' | xargs printf "%.2f")
+            P95_DURATION=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.http_req_duration.values["p(95)"] // "N/A"' | xargs printf "%.2f")
+            P99_DURATION=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.http_req_duration.values["p(99)"] // "N/A"' | xargs printf "%.2f")
+            FAILED_REQUESTS=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.http_req_failed.values.passes // 0')
+            VUS_MAX=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.vus_max.values.max // "N/A"')
+            DATA_RECEIVED=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.data_received.values.count // 0')
+            DATA_SENT=$(cat results/k6-results/k6-summary.json | jq -r '.metrics.data_sent.values.count // 0')
+            
+            # Convert bytes to KB/MB
+            DATA_RECEIVED_KB=$(echo "scale=2; $DATA_RECEIVED / 1024" | bc 2>/dev/null || echo "N/A")
+            DATA_SENT_KB=$(echo "scale=2; $DATA_SENT / 1024" | bc 2>/dev/null || echo "N/A")
+            
+            echo "| Total Requests | $TOTAL_REQUESTS |" >> $GITHUB_STEP_SUMMARY
+            echo "| Max Virtual Users | $VUS_MAX |" >> $GITHUB_STEP_SUMMARY
+            echo "| Avg Response Time | ${AVG_DURATION}ms |" >> $GITHUB_STEP_SUMMARY
+            echo "| P95 Response Time | ${P95_DURATION}ms |" >> $GITHUB_STEP_SUMMARY
+            echo "| P99 Response Time | ${P99_DURATION}ms |" >> $GITHUB_STEP_SUMMARY
+            echo "| Failed Requests | $FAILED_REQUESTS |" >> $GITHUB_STEP_SUMMARY
+            echo "| Data Received | ${DATA_RECEIVED_KB} KB |" >> $GITHUB_STEP_SUMMARY
+            echo "| Data Sent | ${DATA_SENT_KB} KB |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "> ⚠️ k6 summary file not found" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Artillery Results Detail
+          echo "### 🔶 Artillery Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f results/artillery-results/artillery-report.json ]; then
+            echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            
+            # Parse Artillery JSON
+            SCENARIOS_CREATED=$(cat results/artillery-results/artillery-report.json | jq -r '.aggregate.counters["vusers.created"] // 0')
+            SCENARIOS_COMPLETED=$(cat results/artillery-results/artillery-report.json | jq -r '.aggregate.counters["vusers.completed"] // 0')
+            SCENARIOS_FAILED=$(cat results/artillery-results/artillery-report.json | jq -r '.aggregate.counters["vusers.failed"] // 0')
+            HTTP_REQUESTS=$(cat results/artillery-results/artillery-report.json | jq -r '.aggregate.counters["http.requests"] // 0')
+            HTTP_200=$(cat results/artillery-results/artillery-report.json | jq -r '.aggregate.counters["http.codes.200"] // 0')
+            HTTP_ERRORS=$(cat results/artillery-results/artillery-report.json | jq -r '.aggregate.counters["http.codes.5xx"] // 0')
+            RESPONSE_MIN=$(cat results/artillery-results/artillery-report.json | jq -r '.aggregate.summaries["http.response_time"].min // "N/A"')
+            RESPONSE_MAX=$(cat results/artillery-results/artillery-report.json | jq -r '.aggregate.summaries["http.response_time"].max // "N/A"')
+            RESPONSE_MEDIAN=$(cat results/artillery-results/artillery-report.json | jq -r '.aggregate.summaries["http.response_time"].median // "N/A"')
+            RESPONSE_P95=$(cat results/artillery-results/artillery-report.json | jq -r '.aggregate.summaries["http.response_time"].p95 // "N/A"')
+            RESPONSE_P99=$(cat results/artillery-results/artillery-report.json | jq -r '.aggregate.summaries["http.response_time"].p99 // "N/A"')
+            
+            echo "| Scenarios Created | $SCENARIOS_CREATED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Scenarios Completed | $SCENARIOS_COMPLETED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Scenarios Failed | $SCENARIOS_FAILED |" >> $GITHUB_STEP_SUMMARY
+            echo "| HTTP Requests | $HTTP_REQUESTS |" >> $GITHUB_STEP_SUMMARY
+            echo "| HTTP 200 OK | $HTTP_200 |" >> $GITHUB_STEP_SUMMARY
+            echo "| HTTP 5xx Errors | $HTTP_ERRORS |" >> $GITHUB_STEP_SUMMARY
+            echo "| Min Response Time | ${RESPONSE_MIN}ms |" >> $GITHUB_STEP_SUMMARY
+            echo "| Median Response Time | ${RESPONSE_MEDIAN}ms |" >> $GITHUB_STEP_SUMMARY
+            echo "| P95 Response Time | ${RESPONSE_P95}ms |" >> $GITHUB_STEP_SUMMARY
+            echo "| P99 Response Time | ${RESPONSE_P99}ms |" >> $GITHUB_STEP_SUMMARY
+            echo "| Max Response Time | ${RESPONSE_MAX}ms |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "> ⚠️ Artillery report file not found" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Artifacts info
+          echo "### 📁 Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "Download detailed reports from the workflow artifacts:" >> $GITHUB_STEP_SUMMARY
+          echo "- \`k6-results\` - k6 JSON results and summary" >> $GITHUB_STEP_SUMMARY
+          echo "- \`artillery-results\` - Artillery JSON and HTML reports" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.setup.outputs.test_type }}" == "full" ] || [ "${{ needs.setup.outputs.test_type }}" == "stress" ]; then
+            echo "- \`locust-results\` - Locust HTML report and CSV data" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Notify on Failure
         if: failure()
