@@ -1,0 +1,104 @@
+name: PR Load Test (Quick)
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'k6/**'
+      - 'artillery/**'
+      - 'locust/**'
+
+env:
+  TARGET_URL: https://jsonplaceholder.typicode.com
+
+jobs:
+  quick-smoke-test:
+    name: Quick Smoke Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install k6
+
+      - name: Run quick smoke test
+        id: smoke_test
+        run: |
+          k6 run k6/script.js \
+            --vus 5 \
+            --duration 30s \
+            --summary-export=k6-summary.json \
+            2>&1 | tee k6-output.txt
+          
+          # Extract key metrics
+          if [ -f k6-summary.json ]; then
+            AVG=$(jq -r '.metrics.http_req_duration.avg // 0' k6-summary.json)
+            P95=$(jq -r '.metrics.http_req_duration["p(95)"] // 0' k6-summary.json)
+            REQS=$(jq -r '.metrics.http_reqs.count // 0' k6-summary.json)
+            FAILS=$(jq -r '.metrics.http_req_failed.passes // 0' k6-summary.json)
+            
+            echo "avg_duration=$AVG" >> $GITHUB_OUTPUT
+            echo "p95_duration=$P95" >> $GITHUB_OUTPUT
+            echo "total_requests=$REQS" >> $GITHUB_OUTPUT
+            echo "failed_requests=$FAILS" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Comment PR with results
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const avg = '${{ steps.smoke_test.outputs.avg_duration }}' || 'N/A';
+            const p95 = '${{ steps.smoke_test.outputs.p95_duration }}' || 'N/A';
+            const reqs = '${{ steps.smoke_test.outputs.total_requests }}' || 'N/A';
+            const fails = '${{ steps.smoke_test.outputs.failed_requests }}' || '0';
+            
+            const status = parseFloat(fails) > 0 ? '⚠️' : '✅';
+            
+            const body = `## ${status} Load Test Smoke Results
+            
+            Quick smoke test (5 VUs, 30s) completed.
+            
+            | Metric | Value |
+            |--------|-------|
+            | Total Requests | ${reqs} |
+            | Failed Requests | ${fails} |
+            | Avg Response Time | ${parseFloat(avg).toFixed(2)} ms |
+            | P95 Response Time | ${parseFloat(p95).toFixed(2)} ms |
+            
+            <details>
+            <summary>ℹ️ Run full load test</summary>
+            
+            Go to **Actions** → **Load Testing** → **Run workflow** to run comprehensive tests.
+            </details>
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Check thresholds
+        run: |
+          if [ -f k6-summary.json ]; then
+            P95=$(jq -r '.metrics.http_req_duration["p(95)"] // 0' k6-summary.json)
+            FAIL_RATE=$(jq -r '.metrics.http_req_failed.rate // 0' k6-summary.json)
+            
+            # Threshold: P95 < 1000ms, error rate < 10%
+            if (( $(echo "$P95 > 1000" | bc -l) )); then
+              echo "⚠️ Warning: P95 response time ($P95 ms) exceeds 1000ms threshold"
+            fi
+            
+            if (( $(echo "$FAIL_RATE > 0.1" | bc -l) )); then
+              echo "⚠️ Warning: Error rate ($FAIL_RATE) exceeds 10% threshold"
+            fi
+          fi
