@@ -97,7 +97,7 @@ jobs:
       - name: Run Smoke Test
         if: needs.setup.outputs.test_type == 'smoke'
         run: |
-          k6 run load-testing/k6/script.js \
+          k6 run k6/script.js \
             --env SCENARIO=smoke \
             --out json=k6-results.json \
             --summary-export=k6-summary.json
@@ -106,7 +106,7 @@ jobs:
       - name: Run Load Test
         if: needs.setup.outputs.test_type == 'load'
         run: |
-          k6 run load-testing/k6/advanced-script.js \
+          k6 run k6/advanced-script.js \
             --env SCENARIO=load \
             --out json=k6-results.json \
             --summary-export=k6-summary.json
@@ -114,7 +114,7 @@ jobs:
       - name: Run Stress Test
         if: needs.setup.outputs.test_type == 'stress'
         run: |
-          k6 run load-testing/k6/advanced-script.js \
+          k6 run k6/advanced-script.js \
             --env SCENARIO=stress \
             --out json=k6-results.json \
             --summary-export=k6-summary.json
@@ -122,7 +122,7 @@ jobs:
       - name: Run Full Test
         if: needs.setup.outputs.test_type == 'full'
         run: |
-          k6 run load-testing/k6/advanced-script.js \
+          k6 run k6/advanced-script.js \
             --out json=k6-results.json \
             --summary-export=k6-summary.json
 
@@ -167,16 +167,16 @@ jobs:
       - name: Run Smoke Test
         if: needs.setup.outputs.test_type == 'smoke'
         run: |
-          artillery run load-testing/artillery/config.yml \
+          artillery run artillery/config.yml \
             --output artillery-report.json \
-            --config load-testing/artillery/smoke-override.yml
+            --config artillery/smoke-override.yml
           artillery report artillery-report.json --output artillery-report.html
         continue-on-error: true
 
       - name: Run Load/Stress/Full Test
         if: needs.setup.outputs.test_type != 'smoke'
         run: |
-          artillery run load-testing/artillery/advanced-config.yml \
+          artillery run artillery/advanced-config.yml \
             --output artillery-report.json
           artillery report artillery-report.json --output artillery-report.html
         continue-on-error: true
@@ -212,7 +212,7 @@ jobs:
 
       - name: Run Locust Test
         run: |
-          locust -f load-testing/locust/advanced_locustfile.py \
+          locust -f locust/advanced_locustfile.py \
             --host=https://jsonplaceholder.typicode.com \
             --headless \
             --users 50 \
