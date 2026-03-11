@@ -1,0 +1,568 @@
+# ============================================
+# ADVANCED LOAD TESTING - ARTILLERY
+# ============================================
+# 
+# Features:
+# - Multiple API targets
+# - Authentication flow
+# - Complex scenarios dengan branching
+# - Custom functions
+# - CSV data feeding
+# - Plugins untuk metrics
+# - Multiple phases dengan berbagai patterns
+#
+# Cara run:
+#   artillery run advanced-config.yml
+#
+# Dengan output report:
+#   artillery run advanced-config.yml --output report.json
+#   artillery report report.json
+#
+# Debug mode:
+#   DEBUG=http artillery run advanced-config.yml
+
+config:
+  # Multiple targets - gunakan environments
+  environments:
+    production:
+      target: "https://jsonplaceholder.typicode.com"
+      phases:
+        - duration: 60
+          arrivalRate: 5
+    staging:
+      target: "https://jsonplaceholder.typicode.com"
+      phases:
+        - duration: 30
+          arrivalRate: 2
+  
+  # Default target
+  target: "https://jsonplaceholder.typicode.com"
+  
+  # Complex phases untuk berbagai test types
+  phases:
+    # Phase 1: Warm up
+    - name: "Warm up"
+      duration: 30
+      arrivalRate: 1
+      rampTo: 5
+    
+    # Phase 2: Normal load
+    - name: "Normal load"
+      duration: 120
+      arrivalRate: 10
+    
+    # Phase 3: Ramp up to stress
+    - name: "Ramp to stress"
+      duration: 60
+      arrivalRate: 10
+      rampTo: 30
+    
+    # Phase 4: Sustained stress
+    - name: "Sustained stress"
+      duration: 120
+      arrivalRate: 30
+    
+    # Phase 5: Spike test
+    - name: "Spike"
+      duration: 30
+      arrivalRate: 50
+    
+    # Phase 6: Recovery
+    - name: "Recovery"
+      duration: 60
+      arrivalRate: 10
+    
+    # Phase 7: Cool down
+    - name: "Cool down"
+      duration: 30
+      arrivalRate: 10
+      rampTo: 1
+
+  # Default headers untuk semua requests
+  defaults:
+    headers:
+      Content-Type: "application/json"
+      Accept: "application/json"
+      User-Agent: "Artillery-LoadTest/2.0"
+
+  # Performance thresholds (SLOs)
+  ensure:
+    p50: 200
+    p95: 500
+    p99: 1000
+    maxErrorRate: 5
+
+  # Variables untuk dynamic data
+  variables:
+    baseUrlReqRes: "https://reqres.in/api"
+    postIds: [1, 2, 3, 4, 5, 10, 20, 50, 100]
+    userIds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    albumIds: [1, 2, 3, 4, 5, 10, 20, 50]
+
+  # Payload templates
+  payload:
+    - path: "data/users.csv"
+      fields:
+        - "email"
+        - "password"
+        - "name"
+      skipHeader: true
+      order: random
+
+  # HTTP settings
+  http:
+    timeout: 30
+    pool: 10
+    maxSockets: 10
+
+  # Plugins
+  plugins:
+    expect: {}
+    # metrics-by-endpoint: {}  # Uncomment jika plugin terinstall
+
+# ============================================
+# SCENARIOS
+# ============================================
+scenarios:
+  # ==========================================
+  # Scenario 1: Complete User Journey
+  # ==========================================
+  - name: "Complete User Journey"
+    weight: 4
+    flow:
+      # Step 1: Login ke ReqRes API
+      - post:
+          url: "{{ baseUrlReqRes }}/login"
+          json:
+            email: "eve.holt@reqres.in"
+            password: "cityslicka"
+          capture:
+            - json: "$.token"
+              as: "authToken"
+          expect:
+            - statusCode: 200
+            - hasProperty: "token"
+
+      - think: 1
+
+      # Step 2: Browse posts list
+      - get:
+          url: "/posts"
+          capture:
+            - json: "$[0].id"
+              as: "firstPostId"
+            - json: "$[0].userId"
+              as: "firstUserId"
+            - json: "$.length"
+              as: "totalPosts"
+          expect:
+            - statusCode: 200
+            - contentType: json
+
+      - think: 1
+
+      # Step 3: View post detail
+      - get:
+          url: "/posts/{{ firstPostId }}"
+          capture:
+            - json: "$.title"
+              as: "postTitle"
+          expect:
+            - statusCode: 200
+            - hasProperty: "title"
+            - hasProperty: "body"
+
+      - think: 1
+
+      # Step 4: Get post comments
+      - get:
+          url: "/posts/{{ firstPostId }}/comments"
+          capture:
+            - json: "$.length"
+              as: "commentsCount"
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # Step 5: View author profile
+      - get:
+          url: "/users/{{ firstUserId }}"
+          capture:
+            - json: "$.email"
+              as: "authorEmail"
+          expect:
+            - statusCode: 200
+            - hasProperty: "email"
+
+      - think: 2
+
+      # Step 6: Create new post
+      - post:
+          url: "/posts"
+          json:
+            title: "Artillery Advanced Test - {{ $randomString(10) }}"
+            body: "This post was created during load testing at {{ $timestamp }}"
+            userId: "{{ firstUserId }}"
+          capture:
+            - json: "$.id"
+              as: "newPostId"
+          expect:
+            - statusCode: 201
+            - hasProperty: "id"
+
+      - think: 1
+
+      # Step 7: Update the post
+      - put:
+          url: "/posts/{{ newPostId }}"
+          json:
+            id: "{{ newPostId }}"
+            title: "Updated: Artillery Test Post"
+            body: "This post has been updated"
+            userId: "{{ firstUserId }}"
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # Step 8: Partial update
+      - patch:
+          url: "/posts/{{ newPostId }}"
+          json:
+            title: "Final Title - {{ $randomString(5) }}"
+          expect:
+            - statusCode: 200
+
+  # ==========================================
+  # Scenario 2: Search and Filter Heavy
+  # ==========================================
+  - name: "Search and Filter Operations"
+    weight: 3
+    flow:
+      # Filter posts by user
+      - get:
+          url: "/posts?userId={{ $randomNumber(1, 10) }}"
+          expect:
+            - statusCode: 200
+
+      - think: 0.5
+
+      # Filter comments by post
+      - get:
+          url: "/comments?postId={{ $randomNumber(1, 100) }}"
+          expect:
+            - statusCode: 200
+
+      - think: 0.5
+
+      # Get user's todos
+      - get:
+          url: "/users/{{ $randomNumber(1, 10) }}/todos"
+          expect:
+            - statusCode: 200
+
+      - think: 0.5
+
+      # Get user's albums
+      - get:
+          url: "/users/{{ $randomNumber(1, 10) }}/albums"
+          expect:
+            - statusCode: 200
+
+      - think: 0.5
+
+      # Get album photos
+      - get:
+          url: "/albums/{{ $randomNumber(1, 100) }}/photos"
+          expect:
+            - statusCode: 200
+
+      - think: 0.5
+
+      # Get user's posts
+      - get:
+          url: "/users/{{ $randomNumber(1, 10) }}/posts"
+          expect:
+            - statusCode: 200
+
+      - think: 0.5
+
+      # List all users from ReqRes
+      - get:
+          url: "{{ baseUrlReqRes }}/users?page={{ $randomNumber(1, 2) }}"
+          expect:
+            - statusCode: 200
+            - hasProperty: "data"
+            - hasProperty: "total_pages"
+
+      - think: 0.5
+
+      # Get colors/resources
+      - get:
+          url: "{{ baseUrlReqRes }}/unknown"
+          expect:
+            - statusCode: 200
+
+
+  # ==========================================
+  # Scenario 3: CRUD Operations
+  # ==========================================
+  - name: "CRUD Operations"
+    weight: 2
+    flow:
+      # CREATE - Post
+      - post:
+          url: "/posts"
+          json:
+            title: "CRUD Test Post {{ $randomNumber(1000, 9999) }}"
+            body: "Testing CRUD operations with Artillery"
+            userId: "{{ $randomNumber(1, 10) }}"
+          capture:
+            - json: "$.id"
+              as: "createdPostId"
+          expect:
+            - statusCode: 201
+
+      - think: 1
+
+      # READ - Verify created
+      - get:
+          url: "/posts/{{ createdPostId }}"
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # UPDATE - Full update
+      - put:
+          url: "/posts/{{ createdPostId }}"
+          json:
+            id: "{{ createdPostId }}"
+            title: "Updated CRUD Post"
+            body: "Post has been updated via PUT"
+            userId: 1
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # UPDATE - Partial
+      - patch:
+          url: "/posts/{{ createdPostId }}"
+          json:
+            title: "Patched Title Only"
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # DELETE
+      - delete:
+          url: "/posts/{{ createdPostId }}"
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # CREATE - User di ReqRes
+      - post:
+          url: "{{ baseUrlReqRes }}/users"
+          json:
+            name: "Artillery User {{ $randomNumber(100, 999) }}"
+            job: "Load Tester"
+          capture:
+            - json: "$.id"
+              as: "createdUserId"
+          expect:
+            - statusCode: 201
+            - hasProperty: "id"
+            - hasProperty: "createdAt"
+
+      - think: 1
+
+      # UPDATE - User
+      - put:
+          url: "{{ baseUrlReqRes }}/users/{{ createdUserId }}"
+          json:
+            name: "Updated Artillery User"
+            job: "Senior Load Tester"
+          expect:
+            - statusCode: 200
+            - hasProperty: "updatedAt"
+
+      - think: 1
+
+      # DELETE - User
+      - delete:
+          url: "{{ baseUrlReqRes }}/users/{{ createdUserId }}"
+          expect:
+            - statusCode: 204
+
+  # ==========================================
+  # Scenario 4: Authentication Flow
+  # ==========================================
+  - name: "Authentication Flow"
+    weight: 1
+    flow:
+      # Successful login
+      - post:
+          url: "{{ baseUrlReqRes }}/login"
+          json:
+            email: "eve.holt@reqres.in"
+            password: "cityslicka"
+          capture:
+            - json: "$.token"
+              as: "token"
+          expect:
+            - statusCode: 200
+            - hasProperty: "token"
+
+      - think: 1
+
+      # Successful registration
+      - post:
+          url: "{{ baseUrlReqRes }}/register"
+          json:
+            email: "eve.holt@reqres.in"
+            password: "pistol"
+          capture:
+            - json: "$.id"
+              as: "userId"
+            - json: "$.token"
+              as: "regToken"
+          expect:
+            - statusCode: 200
+            - hasProperty: "id"
+            - hasProperty: "token"
+
+      - think: 1
+
+      # Failed login (missing password) - expect error
+      - post:
+          url: "{{ baseUrlReqRes }}/login"
+          json:
+            email: "peter@klaven"
+          expect:
+            - statusCode: 400
+
+      - think: 1
+
+      # Failed registration (missing password)
+      - post:
+          url: "{{ baseUrlReqRes }}/register"
+          json:
+            email: "sydney@fife"
+          expect:
+            - statusCode: 400
+
+  # ==========================================
+  # Scenario 5: Batch/Parallel Requests
+  # ==========================================
+  - name: "Batch Requests"
+    weight: 2
+    flow:
+      # Parallel requests - multiple posts
+      - parallel:
+          - get:
+              url: "/posts/1"
+          - get:
+              url: "/posts/2"
+          - get:
+              url: "/posts/3"
+          - get:
+              url: "/posts/4"
+          - get:
+              url: "/posts/5"
+
+      - think: 1
+
+      # Parallel requests - different resources
+      - parallel:
+          - get:
+              url: "/users"
+          - get:
+              url: "/posts"
+          - get:
+              url: "/comments"
+          - get:
+              url: "/albums"
+          - get:
+              url: "/todos"
+
+      - think: 1
+
+      # Parallel requests - mixed APIs
+      - parallel:
+          - get:
+              url: "/posts/{{ $randomNumber(1, 100) }}"
+          - get:
+              url: "{{ baseUrlReqRes }}/users/{{ $randomNumber(1, 12) }}"
+          - get:
+              url: "/users/{{ $randomNumber(1, 10) }}/posts"
+          - get:
+              url: "{{ baseUrlReqRes }}/unknown"
+
+  # ==========================================
+  # Scenario 6: Stress Test - Rapid Fire
+  # ==========================================
+  - name: "Stress Test - Rapid Requests"
+    weight: 1
+    flow:
+      # Loop untuk rapid requests
+      - loop:
+          - get:
+              url: "/posts/{{ $randomNumber(1, 100) }}"
+          - get:
+              url: "/users/{{ $randomNumber(1, 10) }}"
+          - get:
+              url: "/comments?postId={{ $randomNumber(1, 100) }}"
+        count: 10
+
+  # ==========================================
+  # Scenario 7: Delayed Response Test
+  # ==========================================
+  - name: "Delayed Response Handling"
+    weight: 1
+    flow:
+      # Test dengan delayed response
+      - get:
+          url: "{{ baseUrlReqRes }}/users?delay=2"
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # Another delayed request
+      - get:
+          url: "{{ baseUrlReqRes }}/users?delay=3"
+          expect:
+            - statusCode: 200
+
+  # ==========================================
+  # Scenario 8: Error Handling
+  # ==========================================
+  - name: "Error Handling Test"
+    weight: 1
+    flow:
+      # 404 - Resource not found
+      - get:
+          url: "/posts/999999"
+          expect:
+            - statusCode: 404
+
+      - think: 0.5
+
+      # 404 - User not found
+      - get:
+          url: "{{ baseUrlReqRes }}/users/999"
+          expect:
+            - statusCode: 404
+
+      - think: 0.5
+
+      # Valid request setelah error
+      - get:
+          url: "/posts/1"
+          expect:
+            - statusCode: 200

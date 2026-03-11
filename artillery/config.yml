@@ -1,0 +1,215 @@
+# ============================================
+# STUDI CASE: Load Testing JSONPlaceholder API
+# ============================================
+# JSONPlaceholder adalah REST API dummy gratis untuk testing.
+# URL: https://jsonplaceholder.typicode.com
+#
+# Endpoints yang di-test:
+# - GET /posts        - List semua posts
+# - GET /posts/:id    - Detail post
+# - POST /posts       - Create post baru
+# - PUT /posts/:id    - Update post
+# - DELETE /posts/:id - Hapus post
+# - GET /users        - List users
+# - GET /comments     - List comments dengan filter
+
+config:
+  target: "https://jsonplaceholder.typicode.com"
+  
+  # Test phases - simulasi traffic pattern
+  phases:
+    # Phase 1: Warm up
+    - name: "Warm up"
+      duration: 30
+      arrivalRate: 2
+      
+    # Phase 2: Ramp up
+    - name: "Ramp up load"
+      duration: 60
+      arrivalRate: 2
+      rampTo: 10
+      
+    # Phase 3: Sustained load
+    - name: "Sustained load"
+      duration: 120
+      arrivalRate: 10
+      
+    # Phase 4: Spike test
+    - name: "Spike"
+      duration: 30
+      arrivalRate: 30
+      
+    # Phase 5: Recovery
+    - name: "Recovery"
+      duration: 30
+      arrivalRate: 5
+
+  # Default headers
+  defaults:
+    headers:
+      Content-Type: "application/json"
+      Accept: "application/json"
+
+  # Performance thresholds
+  ensure:
+    p95: 500      # 95th percentile < 500ms
+    p99: 1000     # 99th percentile < 1000ms
+    maxErrorRate: 5  # Max 5% error rate
+
+  # Variables untuk dynamic data
+  variables:
+    postIds:
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+    userIds:
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+
+  # Plugins (optional - install dulu jika mau pakai)
+  # plugins:
+  #   expect: {}
+
+# ============================================
+# SCENARIOS
+# ============================================
+scenarios:
+  # Scenario 1: Browse Posts (Read-heavy)
+  - name: "Browse Posts Flow"
+    weight: 5  # 50% traffic
+    flow:
+      # List all posts
+      - get:
+          url: "/posts"
+          capture:
+            - json: "$[0].id"
+              as: "firstPostId"
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # View post detail
+      - get:
+          url: "/posts/{{ firstPostId }}"
+          capture:
+            - json: "$.userId"
+              as: "authorId"
+          expect:
+            - statusCode: 200
+            - hasProperty: "title"
+
+      - think: 1
+
+      # View post comments
+      - get:
+          url: "/posts/{{ firstPostId }}/comments"
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # View author profile
+      - get:
+          url: "/users/{{ authorId }}"
+          expect:
+            - statusCode: 200
+            - hasProperty: "email"
+
+  # Scenario 2: Create Content (Write operations)
+  - name: "Create Content Flow"
+    weight: 2  # 20% traffic
+    flow:
+      # Create new post
+      - post:
+          url: "/posts"
+          json:
+            title: "Artillery Load Test Post"
+            body: "Ini adalah post yang dibuat dari Artillery load testing untuk studi case belajar."
+            userId: "{{ $randomNumber(1, 10) }}"
+          capture:
+            - json: "$.id"
+              as: "newPostId"
+          expect:
+            - statusCode: 201
+            - hasProperty: "id"
+
+      - think: 2
+
+      # Update the post
+      - put:
+          url: "/posts/1"
+          json:
+            id: 1
+            title: "Updated: Artillery Load Test"
+            body: "Post ini sudah di-update via Artillery"
+            userId: 1
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # Partial update (PATCH)
+      - patch:
+          url: "/posts/1"
+          json:
+            title: "Patched Title Only"
+          expect:
+            - statusCode: 200
+
+  # Scenario 3: Search & Filter
+  - name: "Search and Filter Flow"
+    weight: 2  # 20% traffic
+    flow:
+      # Filter comments by postId
+      - get:
+          url: "/comments?postId={{ $randomNumber(1, 100) }}"
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # Filter posts by userId
+      - get:
+          url: "/posts?userId={{ $randomNumber(1, 10) }}"
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # Get user's todos
+      - get:
+          url: "/users/{{ $randomNumber(1, 10) }}/todos"
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # Get user's albums
+      - get:
+          url: "/users/{{ $randomNumber(1, 10) }}/albums"
+          expect:
+            - statusCode: 200
+
+  # Scenario 4: Delete Operations
+  - name: "Delete Flow"
+    weight: 1  # 10% traffic
+    flow:
+      # Delete a post
+      - delete:
+          url: "/posts/{{ $randomNumber(1, 100) }}"
+          expect:
+            - statusCode: 200
+
+      - think: 1
+
+      # Verify deletion (will still return 200 on JSONPlaceholder)
+      - get:
+          url: "/posts/1"
+          expect:
+            - statusCode: 200
