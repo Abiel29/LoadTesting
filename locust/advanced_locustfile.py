@@ -46,15 +46,10 @@ from locust.runners import MasterRunner, WorkerRunner
 @dataclass
 class APIConfig:
     json_placeholder: str = "https://jsonplaceholder.typicode.com"
-    reqres: str = "https://reqres.in/api"
+    # Using httpbin.org as fallback since reqres.in has rate limiting
+    httpbin: str = "https://httpbin.org"
 
 CONFIG = APIConfig()
-
-# Test data
-TEST_USERS = [
-    {"email": "eve.holt@reqres.in", "password": "cityslicka"},
-    {"email": "emma.wong@reqres.in", "password": "pistol"},
-]
 
 POST_TITLES = [
     "Performance Testing Best Practices",
@@ -109,7 +104,7 @@ def on_test_start(environment, **kwargs):
     """Called when test starts."""
     metrics.start_time = datetime.now()
     logger.info("🚀 Advanced Load Test Started")
-    logger.info(f"   Targets: {CONFIG.json_placeholder}, {CONFIG.reqres}")
+    logger.info(f"   Targets: {CONFIG.json_placeholder}, {CONFIG.httpbin}")
     
     if isinstance(environment.runner, MasterRunner):
         logger.info("   Running in MASTER mode")
@@ -139,21 +134,20 @@ def on_user_error(user_instance, exception, tb, **kwargs):
 # API CLIENT MIXINS
 # ============================================
 class AuthMixin:
-    """Mixin untuk authentication operations."""
+    """Mixin untuk authentication operations (simulated)."""
     
     token: Optional[str] = None
     
-    def login(self, email: str, password: str) -> bool:
-        """Login dan simpan token."""
+    def login(self, email: str = "test@example.com", password: str = "password") -> bool:
+        """Simulated login using httpbin."""
         with self.client.post(
-            f"{CONFIG.reqres}/login",
+            f"{CONFIG.httpbin}/post",
             json={"email": email, "password": password},
             name="[AUTH] POST /login",
             catch_response=True
         ) as response:
             if response.status_code == 200:
-                data = response.json()
-                self.token = data.get("token")
+                self.token = "simulated_token_12345"
                 metrics.record_auth(True)
                 response.success()
                 return True
@@ -163,16 +157,16 @@ class AuthMixin:
                 return False
     
     def register(self, email: str, password: str) -> Optional[Dict]:
-        """Register user baru."""
+        """Simulated register using httpbin."""
         with self.client.post(
-            f"{CONFIG.reqres}/register",
+            f"{CONFIG.httpbin}/post",
             json={"email": email, "password": password},
             name="[AUTH] POST /register",
             catch_response=True
         ) as response:
             if response.status_code == 200:
                 response.success()
-                return response.json()
+                return {"id": random.randint(1, 1000), "token": "fake_token"}
             else:
                 response.failure(f"Register failed: {response.status_code}")
                 return None
@@ -305,22 +299,18 @@ class PostsMixin:
 
 
 class UsersMixin:
-    """Mixin untuk Users API operations."""
+    """Mixin untuk Users API operations (using JSONPlaceholder)."""
     
     def list_users(self, page: int = 1) -> List[Dict]:
-        """GET - List users dengan pagination."""
+        """GET - List users."""
         with self.client.get(
-            f"{CONFIG.reqres}/users?page={page}",
+            f"{CONFIG.json_placeholder}/users",
             name="[USERS] GET /users",
             catch_response=True
         ) as response:
             if response.status_code == 200:
-                data = response.json()
-                if "data" in data:
-                    response.success()
-                    return data["data"]
-                else:
-                    response.failure("Missing data field")
+                response.success()
+                return response.json()
             else:
                 response.failure(f"Status: {response.status_code}")
             return []
@@ -328,13 +318,13 @@ class UsersMixin:
     def get_user(self, user_id: int) -> Optional[Dict]:
         """GET - Detail user."""
         with self.client.get(
-            f"{CONFIG.reqres}/users/{user_id}",
+            f"{CONFIG.json_placeholder}/users/{user_id}",
             name="[USERS] GET /users/:id",
             catch_response=True
         ) as response:
             if response.status_code == 200:
                 response.success()
-                return response.json().get("data")
+                return response.json()
             else:
                 response.failure(f"Status: {response.status_code}")
                 return None
@@ -342,7 +332,7 @@ class UsersMixin:
     def create_user(self, name: str, job: str) -> Optional[Dict]:
         """POST - Create user baru."""
         with self.client.post(
-            f"{CONFIG.reqres}/users",
+            f"{CONFIG.json_placeholder}/users",
             json={"name": name, "job": job},
             name="[USERS] POST /users",
             catch_response=True
@@ -357,7 +347,7 @@ class UsersMixin:
     def update_user(self, user_id: int, name: str, job: str) -> bool:
         """PUT - Update user."""
         with self.client.put(
-            f"{CONFIG.reqres}/users/{user_id}",
+            f"{CONFIG.json_placeholder}/users/{user_id}",
             json={"name": name, "job": job},
             name="[USERS] PUT /users/:id",
             catch_response=True
@@ -372,11 +362,12 @@ class UsersMixin:
     def delete_user(self, user_id: int) -> bool:
         """DELETE - Hapus user."""
         with self.client.delete(
-            f"{CONFIG.reqres}/users/{user_id}",
+            f"{CONFIG.json_placeholder}/users/{user_id}",
             name="[USERS] DELETE /users/:id",
             catch_response=True
         ) as response:
-            if response.status_code == 204:
+            # JSONPlaceholder returns 200 for delete
+            if response.status_code == 200:
                 response.success()
                 return True
             else:
@@ -412,18 +403,18 @@ class ResourcesMixin:
         return response.json() if response.status_code == 200 else []
     
     def list_colors(self) -> List[Dict]:
-        """GET - List colors (unknown resource)."""
+        """GET - List comments as alternative resource."""
         response = self.client.get(
-            f"{CONFIG.reqres}/unknown",
-            name="[RESOURCES] GET /unknown"
+            f"{CONFIG.json_placeholder}/comments?_limit=10",
+            name="[RESOURCES] GET /comments"
         )
-        return response.json().get("data", []) if response.status_code == 200 else []
+        return response.json() if response.status_code == 200 else []
     
     def delayed_request(self, seconds: int = 3):
-        """GET - Request dengan delay."""
+        """GET - Request dengan delay using httpbin."""
         self.client.get(
-            f"{CONFIG.reqres}/users?delay={seconds}",
-            name=f"[RESOURCES] GET /users?delay={seconds}",
+            f"{CONFIG.httpbin}/delay/{seconds}",
+            name=f"[RESOURCES] GET /delay/{seconds}",
             timeout=seconds + 5
         )
 
@@ -473,8 +464,7 @@ class ContentCreationTasks(TaskSet):
     
     def on_start(self):
         """Login sebelum create content."""
-        user = random.choice(TEST_USERS)
-        self.user.login(user["email"], user["password"])
+        self.user.login()
     
     @tag("write", "posts")
     @task(5)
@@ -546,8 +536,7 @@ class AdminTasks(TaskSet):
     """Tasks untuk admin operations."""
     
     def on_start(self):
-        user = random.choice(TEST_USERS)
-        self.user.login(user["email"], user["password"])
+        self.user.login()
     
     @tag("admin", "users")
     @task(3)
@@ -636,7 +625,7 @@ class AggressiveUser(FastHttpUser, AuthMixin, PostsMixin, UsersMixin, ResourcesM
         """Rapid requests tanpa jeda."""
         self.client.get(f"{CONFIG.json_placeholder}/posts")
         self.client.get(f"{CONFIG.json_placeholder}/users")
-        self.client.get(f"{CONFIG.reqres}/users")
+        self.client.get(f"{CONFIG.json_placeholder}/todos")
         self.client.get(f"{CONFIG.json_placeholder}/comments")
 
 
